@@ -1,5 +1,5 @@
-import React, { useState } from "react";
-import { PenLine, Clock, ChevronRight } from "lucide-react";
+import { useState } from "react";
+import { PenLine, Clock } from "lucide-react";
 
 /**
  * The `App` component serves as the main entry point for a React application
@@ -57,6 +57,7 @@ function App() {
   });
 
   const [optimizedPrompt, setOptimizedPrompt] = useState("");
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleOptimizeClick = async () => {
     const prompt = `As a prompt engineering expert, please generate an English prompt based on the answers to the 6 questions below, targeting AI beginners. The prompt must incorporate the content from all 6 answers to help formulate high-quality questions for AI. Please provide only the prompt itself, without any additional content.
@@ -74,23 +75,70 @@ What Output format you want AI to generate? ${formData.output || "tool name (off
 What Concern you have about this discussion with AI? ${formData.concern || "AI hallucinations (if not found, please be honest and don't make up information)."}.`;
 
     try {
-      const response = await fetch('http://localhost:3000/api/optimize', {
-        method: 'POST',
+      setIsLoading(true);
+      setOptimizedPrompt(""); // Clear previous content
+
+      // Use fetch with streaming response handling
+      const response = await fetch("http://localhost:3000/api/optimize", {
+        method: "POST",
         headers: {
-          'Content-Type': 'application/json',
+          "Content-Type": "application/json",
         },
         body: JSON.stringify({ template: prompt }),
       });
 
       if (!response.ok) {
-        throw new Error('Failed to optimize prompt');
+        throw new Error("Failed to optimize prompt");
       }
 
-      const data = await response.json();
-      setOptimizedPrompt(data.optimizedPrompt);
+      // Handle the stream
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error("Failed to get response reader");
+      }
+
+      // Read the stream
+      while (true) {
+        const { done, value } = await reader.read();
+
+        if (done) {
+          break;
+        }
+
+        // Convert the chunk to text
+        const chunk = new TextDecoder().decode(value);
+
+        // Process SSE data
+        const lines = chunk.split("\n\n");
+        for (const line of lines) {
+          if (line.startsWith("data: ")) {
+            try {
+              const data = JSON.parse(line.substring(6));
+
+              if (data.error) {
+                throw new Error(data.error);
+              }
+
+              if (data.done) {
+                // Stream completed
+                continue;
+              }
+
+              if (data.content) {
+                // Append new content
+                setOptimizedPrompt((prev) => prev + data.content);
+              }
+            } catch (e) {
+              console.error("Error parsing SSE data:", e);
+            }
+          }
+        }
+      }
     } catch (error) {
-      console.error('Error optimizing prompt:', error);
-      setOptimizedPrompt('Error: Failed to optimize prompt. Please try again.');
+      console.error("Error optimizing prompt:", error);
+      setOptimizedPrompt("Error: Failed to optimize prompt. Please try again.");
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -239,18 +287,32 @@ What Concern you have about this discussion with AI? ${formData.concern || "AI h
             />
           </div>
 
-          <button 
-            className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium"
+          <button
+            className="w-full bg-blue-600 text-white py-3 rounded-lg hover:bg-blue-700 transition-colors font-medium disabled:bg-blue-400"
             onClick={handleOptimizeClick}
+            disabled={isLoading}
           >
-            Optimize Prompt
+            {isLoading ? "Generating..." : "Optimize Prompt"}
           </button>
 
           <div className="bg-gray-100 p-6 rounded-lg">
             <h3 className="font-medium mb-2">Optimized Prompt</h3>
-            <pre className="text-gray-600 whitespace-pre-wrap">
-              {optimizedPrompt || "Your optimized prompt will be displayed here. Optimize your prompt now!"}
-            </pre>
+            <div className="relative">
+              {isLoading && (
+                <div className="absolute right-0 top-0">
+                  <div className="animate-pulse flex space-x-1">
+                    <div className="h-2 w-2 bg-blue-600 rounded-full"></div>
+                    <div className="h-2 w-2 bg-blue-600 rounded-full"></div>
+                    <div className="h-2 w-2 bg-blue-600 rounded-full"></div>
+                  </div>
+                </div>
+              )}
+              <pre className="text-gray-600 whitespace-pre-wrap">
+                {optimizedPrompt ||
+                  "Your optimized prompt will be displayed here. Optimize your prompt now!"}
+                {isLoading && <span className="animate-blink">|</span>}
+              </pre>
+            </div>
           </div>
         </div>
       </main>
